@@ -6,6 +6,7 @@ import authRoutes from "./routes/authRoutes.js";
 import testRoutes from "./routes/testRoutes.js";
 import projectRoutes from "./routes/projectRoutes.js";
 import paperRoutes from "./routes/paperRoutes.js";
+import comparisonRoutes from "./routes/comparisonRoutes.js";
 
 // Load environment variables from server/.env
 dotenv.config();
@@ -22,6 +23,7 @@ app.use("/api/auth", authRoutes);
 app.use("/api/test", testRoutes);
 app.use("/api/projects", projectRoutes);
 app.use("/api/papers", paperRoutes);
+app.use("/api/comparisons", comparisonRoutes);
 
 // Check API and database connection status
 app.get("/api/health", (req, res) => {
