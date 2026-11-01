@@ -1,6 +1,6 @@
-
 import mongoose from "mongoose";
 import Paper from "../models/Paper.js";
+import { calculateSemanticSimilarity } from "../services/mlService.js";
 
 // Common English words that provide little value for text comparison.
 const stopWords = new Set([
@@ -89,9 +89,7 @@ const analyzePublications = (papers) => {
   ];
 
   const chronologicalOrder = [...papersWithYear]
-    .sort(
-      (a, b) => a.publicationYear - b.publicationYear
-    )
+    .sort((a, b) => a.publicationYear - b.publicationYear)
     .map((paper) => ({
       paperId: paper._id,
       title: paper.title,
@@ -129,8 +127,6 @@ const analyzeAbstracts = (papers) => {
 
 // Calculate TF-IDF vectors for research paper abstracts.
 const calculateTFIDF = (documents) => {
-
-  // Convert abstracts into clean tokens and remove stop words.
   const tokenizedDocuments = documents.map((document) =>
     document
       .toLowerCase()
@@ -141,14 +137,12 @@ const calculateTFIDF = (documents) => {
       )
   );
 
-  // Create a vocabulary containing all unique words.
   const vocabulary = [
     ...new Set(tokenizedDocuments.flat()),
   ];
 
   const totalDocuments = tokenizedDocuments.length;
 
-  // Calculate a TF-IDF vector for each document.
   const vectors = tokenizedDocuments.map((tokens) => {
     const termCounts = {};
 
@@ -166,7 +160,6 @@ const calculateTFIDF = (documents) => {
         (document) => document.includes(term)
       ).length;
 
-      // Smoothed IDF prevents zero weights for shared terms.
       const inverseDocumentFrequency =
         Math.log(
           (totalDocuments + 1) / (documentFrequency + 1)
@@ -195,7 +188,6 @@ const calculateCosineSimilarity = (vectorA, vectorB) => {
   magnitudeA = Math.sqrt(magnitudeA);
   magnitudeB = Math.sqrt(magnitudeB);
 
-  // Prevent division by zero.
   if (magnitudeA === 0 || magnitudeB === 0) {
     return 0;
   }
@@ -203,7 +195,7 @@ const calculateCosineSimilarity = (vectorA, vectorB) => {
   return dotProduct / (magnitudeA * magnitudeB);
 };
 
-// Analyse similarity between research paper abstracts.
+// Compare abstracts using TF-IDF.
 const analyzeAbstractSimilarity = (papers) => {
   const documents = papers.map(
     (paper) => paper.abstract || ""
@@ -213,7 +205,6 @@ const analyzeAbstractSimilarity = (papers) => {
 
   const similarities = [];
 
-  // Compare every unique pair of papers.
   for (let i = 0; i < papers.length; i++) {
     for (let j = i + 1; j < papers.length; j++) {
       const similarity = calculateCosineSimilarity(
@@ -251,12 +242,54 @@ const analyzeAbstractSimilarity = (papers) => {
   };
 };
 
+// Compare abstracts using Sentence-BERT semantic embeddings.
+const analyzeSemanticSimilarity = async (papers) => {
+  const papersWithAbstracts = papers.filter(
+    (paper) =>
+      typeof paper.abstract === "string" &&
+      paper.abstract.trim().length >= 30
+  );
+
+  const similarities = [];
+
+  for (let i = 0; i < papersWithAbstracts.length; i++) {
+    for (let j = i + 1; j < papersWithAbstracts.length; j++) {
+      const paperA = papersWithAbstracts[i];
+      const paperB = papersWithAbstracts[j];
+
+      const result = await calculateSemanticSimilarity(
+        paperA.abstract.trim(),
+        paperB.abstract.trim()
+      );
+
+      similarities.push({
+        paperA: {
+          paperId: paperA._id,
+          title: paperA.title,
+        },
+        paperB: {
+          paperId: paperB._id,
+          title: paperB.title,
+        },
+        similarityScore: result.similarityScore,
+        similarityPercentage: result.similarityPercentage,
+      });
+    }
+  }
+
+  return {
+    method: "Sentence-BERT (all-MiniLM-L6-v2) with Cosine Similarity",
+    totalComparisons: similarities.length,
+    skippedPapers: papers.length - papersWithAbstracts.length,
+    similarities,
+  };
+};
+
 // Compare selected research papers.
 export const comparePapers = async (req, res) => {
   try {
-    const { paperIds } = req.body;
+    const { paperIds } = req.body ?? {};
 
-    // Validate the submitted paper IDs.
     if (!Array.isArray(paperIds) || paperIds.length < 2) {
       return res.status(400).json({
         message:
@@ -264,7 +297,6 @@ export const comparePapers = async (req, res) => {
       });
     }
 
-    // Limit the number of papers in a single comparison.
     if (paperIds.length > 5) {
       return res.status(400).json({
         message:
@@ -272,7 +304,6 @@ export const comparePapers = async (req, res) => {
       });
     }
 
-    // Ensure every ID is valid.
     const validIds = paperIds.every((id) =>
       mongoose.isValidObjectId(id)
     );
@@ -283,7 +314,6 @@ export const comparePapers = async (req, res) => {
       });
     }
 
-    // Prevent duplicate paper selections.
     const uniqueIds = [...new Set(paperIds)];
 
     if (uniqueIds.length !== paperIds.length) {
@@ -292,13 +322,12 @@ export const comparePapers = async (req, res) => {
       });
     }
 
-    // Retrieve only papers owned by the authenticated user.
+    // Only retrieve papers owned by the authenticated user.
     const papers = await Paper.find({
       _id: { $in: paperIds },
       owner: req.user.userId,
     }).lean();
 
-    // Ensure every requested paper was found and belongs to the user.
     if (papers.length !== paperIds.length) {
       return res.status(404).json({
         message:
@@ -306,13 +335,13 @@ export const comparePapers = async (req, res) => {
       });
     }
 
-    // Analyse keywords, publication details, and abstracts.
+    // Run existing analyses and the new semantic analysis.
     const keywordAnalysis = analyzeKeywords(papers);
     const publicationAnalysis = analyzePublications(papers);
     const abstractAnalysis = analyzeAbstracts(papers);
     const abstractSimilarity = analyzeAbstractSimilarity(papers);
+    const semanticSimilarity = await analyzeSemanticSimilarity(papers);
 
-    // Build the structured comparison.
     const comparison = {
       totalPapers: papers.length,
 
@@ -330,6 +359,7 @@ export const comparePapers = async (req, res) => {
       publicationAnalysis,
       abstractAnalysis,
       abstractSimilarity,
+      semanticSimilarity,
     };
 
     return res.status(200).json({

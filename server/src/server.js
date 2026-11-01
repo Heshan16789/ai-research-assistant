@@ -2,30 +2,34 @@ import express from "express";
 import dotenv from "dotenv";
 import mongoose from "mongoose";
 import dns from "node:dns";
+
 import authRoutes from "./routes/authRoutes.js";
 import testRoutes from "./routes/testRoutes.js";
 import projectRoutes from "./routes/projectRoutes.js";
 import paperRoutes from "./routes/paperRoutes.js";
 import comparisonRoutes from "./routes/comparisonRoutes.js";
+import keywordRoutes from "./routes/keywordRoutes.js";
+import clusteringRoutes from "./routes/clusteringRoutes.js";
+import recommendationRoutes from "./routes/recommendationRoutes.js";
 
-// Load environment variables from server/.env
 dotenv.config();
 
-// Workaround for the DNS lookup issue on your Windows setup
 dns.setServers(["8.8.8.8", "8.8.4.4"]);
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// Read JSON request bodies
 app.use(express.json());
+
 app.use("/api/auth", authRoutes);
 app.use("/api/test", testRoutes);
 app.use("/api/projects", projectRoutes);
 app.use("/api/papers", paperRoutes);
 app.use("/api/comparisons", comparisonRoutes);
+app.use("/api/keywords", keywordRoutes);
+app.use("/api/clustering", clusteringRoutes);
+app.use("/api/recommendations", recommendationRoutes);
 
-// Check API and database connection status
 app.get("/api/health", (req, res) => {
   const databaseConnected = mongoose.connection.readyState === 1;
 
@@ -36,7 +40,6 @@ app.get("/api/health", (req, res) => {
   });
 });
 
-// Connect to MongoDB before starting the server
 const startServer = async () => {
   try {
     if (!process.env.MONGODB_URI) {
@@ -53,9 +56,11 @@ const startServer = async () => {
     app.listen(PORT, () => {
       console.log(`Server running at http://localhost:${PORT}`);
     });
+
   } catch (error) {
     console.error("Startup failed:", error.name);
     console.error("Details:", error.message);
+
     console.error(
       "Check MONGODB_URI in server/.env, your database password, and Atlas IP access."
     );
