@@ -2,6 +2,29 @@
 import mongoose from "mongoose";
 import Paper from "../models/Paper.js";
 
+// Common English words that provide little value for text comparison.
+const stopWords = new Set([
+  "a", "an", "the",
+  "is", "are", "was", "were",
+  "be", "been", "being",
+  "and", "or", "but",
+  "of", "in", "on", "at",
+  "to", "from", "for", "with",
+  "by", "as", "into",
+  "this", "that", "these", "those",
+  "it", "its", "they", "them",
+  "their", "we", "our", "you",
+  "he", "she", "his", "her",
+  "which", "who", "whom",
+  "what", "when", "where", "why", "how",
+  "can", "could", "may", "might",
+  "will", "would", "shall", "should",
+  "do", "does", "did",
+  "have", "has", "had",
+  "not", "no", "so", "than",
+  "then", "also", "such"
+]);
+
 // Analyse common and unique keywords across research papers.
 const analyzeKeywords = (papers) => {
   const keywordSets = papers.map(
@@ -13,12 +36,10 @@ const analyzeKeywords = (papers) => {
       )
   );
 
-  // Find keywords shared by all selected papers.
   const commonKeywords = [...keywordSets[0]].filter(
     (keyword) => keywordSets.every((set) => set.has(keyword))
   );
 
-  // Find keywords unique to each paper.
   const paperKeywords = papers.map((paper, index) => ({
     paperId: paper._id,
     title: paper.title,
@@ -59,7 +80,6 @@ const analyzePublications = (papers) => {
   const yearRange =
     years.length > 0 ? latestYear - earliestYear : null;
 
-  // Collect unique publication venues.
   const venues = [
     ...new Set(
       papers
@@ -68,7 +88,6 @@ const analyzePublications = (papers) => {
     ),
   ];
 
-  // Sort papers from oldest to newest.
   const chronologicalOrder = [...papersWithYear]
     .sort(
       (a, b) => a.publicationYear - b.publicationYear
@@ -106,6 +125,130 @@ const analyzeAbstracts = (papers) => {
       hasAbstract: abstract.length > 0,
     };
   });
+};
+
+// Calculate TF-IDF vectors for research paper abstracts.
+const calculateTFIDF = (documents) => {
+
+  // Convert abstracts into clean tokens and remove stop words.
+  const tokenizedDocuments = documents.map((document) =>
+    document
+      .toLowerCase()
+      .replace(/[^\w\s]/g, " ")
+      .split(/\s+/)
+      .filter(
+        (word) => word.length > 1 && !stopWords.has(word)
+      )
+  );
+
+  // Create a vocabulary containing all unique words.
+  const vocabulary = [
+    ...new Set(tokenizedDocuments.flat()),
+  ];
+
+  const totalDocuments = tokenizedDocuments.length;
+
+  // Calculate a TF-IDF vector for each document.
+  const vectors = tokenizedDocuments.map((tokens) => {
+    const termCounts = {};
+
+    tokens.forEach((token) => {
+      termCounts[token] = (termCounts[token] || 0) + 1;
+    });
+
+    return vocabulary.map((term) => {
+      const termFrequency =
+        tokens.length > 0
+          ? (termCounts[term] || 0) / tokens.length
+          : 0;
+
+      const documentFrequency = tokenizedDocuments.filter(
+        (document) => document.includes(term)
+      ).length;
+
+      // Smoothed IDF prevents zero weights for shared terms.
+      const inverseDocumentFrequency =
+        Math.log(
+          (totalDocuments + 1) / (documentFrequency + 1)
+        ) + 1;
+
+      return termFrequency * inverseDocumentFrequency;
+    });
+  });
+
+  return vectors;
+};
+
+// Calculate cosine similarity between two vectors.
+const calculateCosineSimilarity = (vectorA, vectorB) => {
+  let dotProduct = 0;
+  let magnitudeA = 0;
+  let magnitudeB = 0;
+
+  for (let i = 0; i < vectorA.length; i++) {
+    dotProduct += vectorA[i] * vectorB[i];
+
+    magnitudeA += vectorA[i] ** 2;
+    magnitudeB += vectorB[i] ** 2;
+  }
+
+  magnitudeA = Math.sqrt(magnitudeA);
+  magnitudeB = Math.sqrt(magnitudeB);
+
+  // Prevent division by zero.
+  if (magnitudeA === 0 || magnitudeB === 0) {
+    return 0;
+  }
+
+  return dotProduct / (magnitudeA * magnitudeB);
+};
+
+// Analyse similarity between research paper abstracts.
+const analyzeAbstractSimilarity = (papers) => {
+  const documents = papers.map(
+    (paper) => paper.abstract || ""
+  );
+
+  const vectors = calculateTFIDF(documents);
+
+  const similarities = [];
+
+  // Compare every unique pair of papers.
+  for (let i = 0; i < papers.length; i++) {
+    for (let j = i + 1; j < papers.length; j++) {
+      const similarity = calculateCosineSimilarity(
+        vectors[i],
+        vectors[j]
+      );
+
+      similarities.push({
+        paperA: {
+          paperId: papers[i]._id,
+          title: papers[i].title,
+        },
+        paperB: {
+          paperId: papers[j]._id,
+          title: papers[j].title,
+        },
+        similarityScore: Number(similarity.toFixed(4)),
+        similarityPercentage: Number(
+          (similarity * 100).toFixed(2)
+        ),
+      });
+    }
+  }
+
+  return {
+    method: "TF-IDF with Smoothed IDF and Cosine Similarity",
+    preprocessing: [
+      "Lowercase conversion",
+      "Punctuation removal",
+      "Stop-word removal",
+      "Single-character token removal",
+    ],
+    totalComparisons: similarities.length,
+    similarities,
+  };
 };
 
 // Compare selected research papers.
@@ -167,6 +310,7 @@ export const comparePapers = async (req, res) => {
     const keywordAnalysis = analyzeKeywords(papers);
     const publicationAnalysis = analyzePublications(papers);
     const abstractAnalysis = analyzeAbstracts(papers);
+    const abstractSimilarity = analyzeAbstractSimilarity(papers);
 
     // Build the structured comparison.
     const comparison = {
@@ -185,6 +329,7 @@ export const comparePapers = async (req, res) => {
       keywordAnalysis,
       publicationAnalysis,
       abstractAnalysis,
+      abstractSimilarity,
     };
 
     return res.status(200).json({
@@ -200,3 +345,5 @@ export const comparePapers = async (req, res) => {
     });
   }
 };
+
+
