@@ -21,3 +21,9 @@ npm-debug.log*
 .DS_Store
 Thumbs.db
 server/login.json
+
+# Python generated files
+__pycache__/
+*.py[cod]
+venv/
+.venv/
